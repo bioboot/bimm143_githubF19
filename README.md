@@ -1,1 +1,3 @@
-# bimm143_githubF19
+# Bioinformatics
+
+This is my work from BIMM143 at UCSD.
