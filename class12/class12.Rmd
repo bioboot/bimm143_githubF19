@@ -30,3 +30,11 @@ ligand <- atom.select(pdb, "ligand", value=TRUE)
 write.pdb(ligand, file="1hsg_ligand.pdb")
 ```
 
+## Process our docking results
+
+```{r}
+library(bio3d)
+res <- read.pdb("all.pdbqt", multi=TRUE)
+write.pdb(res, "results.pdb")
+```
+
