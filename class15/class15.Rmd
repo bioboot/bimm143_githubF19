@@ -1,0 +1,257 @@
+---
+title: "Class 15: Pathway Analysis from RNA-Seq Results"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## About our Input Data
+The data for today's hands-on session comes from GEO entry: GSE37704, which is associated with the following publication:
+
+> Trapnell C, Hendrickson DG, Sauvageau M, Goff L et al. "Differential analysis of gene regulation at transcript resolution with RNA-seq". Nat Biotechnol 2013 Jan;31(1):46-53. PMID: 23222703
+
+## Import count and metadata
+Read our input files:
+```{r}
+metaFile <- "GSE37704_metadata.csv"
+countFile <- "GSE37704_featurecounts.csv"
+
+# Import metadata and take a peak
+colData = read.csv(metaFile, row.names=1)
+head(colData)
+```
+
+```{r}
+# Import countdata
+countData = read.csv(countFile, row.names=1)
+head(countData)
+```
+
+The *length* column in countData is going to cause problems with the required 
+matching to the metadata file so lets remove it here
+
+```{r}
+# Note we need to remove the first $length col from contData
+countData <- as.matrix(countData[,-1])
+head(countData)
+```
+
+### Check for match of contData and colData entries
+Double check that the colnames in countData match the rowname id values in the 
+colData metadata file.
+
+```{r}
+colnames(countData)
+```
+
+```{r}
+rownames(colData)
+```
+
+We can use the `all()` function to check if all entries in a vector are TRUE.
+
+```{r}
+all( colnames(countData) == rownames(colData) )
+```
+
+```{r}
+# test how the all() function works
+all( c(T,F,T) )
+```
+
+
+## Remove zero count genes
+
+We want to remove genes that have 0 count values in all experiments 
+(i.e. genes/rows that have 0 counts across all experiments/cols).
+
+```{r}
+# Filter out zero count genes
+countData = countData[ rowSums(countData) != 0, ]
+head(countData)
+```
+
+We have `r nrow(countData)` genes remaining for analysis
+
+```{r}
+nrow(countData)
+```
+
+
+## Principal Component Analysis (PCA)
+
+A first step in any analysis like this is to plot and examine the data.
+This is a rather large data set so conventional plots are going to be challenging 
+to make and interpret. Enter our old friend **PCA**.
+
+```{r}
+# Rember to take the transpose of our data
+pc <- prcomp(t(countData))
+plot(pc)
+```
+
+```{r}
+options(scipen=999) # turn off scientic notation
+ summary(pc) 
+```
+
+```{r}
+plot(pc$x[,1:2], col=c(rep("red",3), rep("blue",3)) )
+# add some labels
+labs <- sub("_sirna","",colData$condition)
+labs <- sub("hoxa1_","",labs)
+labs <- paste0(labs, "-", 1:3)
+text(pc$x[,1:2], labels = labs, col=c(rep("red",3), rep("blue",3)), pos=4)
+abline(v=0, col="gray", lty=3)
+abline(h=0, col="gray", lty=3)
+```
+
+How about the loadings along the dominant PC1
+
+```{r}
+plot( abs(pc$rotation[,"PC1"]), typ="h")
+
+# In the R console
+# plot( abs(pc$rotation[,"PC1"]), typ="h")
+# i <- identify( abs(pc$rotation[,"PC1"]), labels=rownames(countData) )
+
+
+```
+
+
+
+# DESeq analysis
+
+Differential expression analysis with **DESeq2**
+
+```{r}
+library(DESeq2)
+```
+
+```{r}
+# Setup the object with our data in the way DESeq wants it
+dds = DESeqDataSetFromMatrix(countData=countData,
+                             colData=colData,
+                             design=~condition)
+# Run the analysis
+dds = DESeq(dds)
+```
+
+Get our results
+```{r}
+res = results(dds)
+res
+```
+
+```{r}
+plot(res$log2FoldChange, -log(res$padj))
+```
+
+Lets add some color
+```{r}
+mycols <- rep("gray",length(res$padj))
+mycols[ abs(res$log2FoldChange) > 2] <- "blue"
+mycols[ res$padj > 0.005] <- "gray"
+plot(res$log2FoldChange, -log(res$padj), col=mycols)
+```
+
+## Add gene symbols and entrez ids
+```{r eval=FALSE}
+BiocManager::install("AnnotationDbi")
+BiocManager::install("org.Hs.eg.db")
+```
+
+```{r}
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+# We can translate between all the following database ID systems
+columns(org.Hs.eg.db)
+```
+
+```{r}
+res$symbol = mapIds(org.Hs.eg.db,
+                    keys=row.names(countData), # where are my IDs
+                    keytype="ENSEMBL",         # what format are my IDs
+                    column="SYMBOL",           # the new format I want
+                    multiVals="first")
+
+res
+```
+
+```{r}
+res$entrez = mapIds(org.Hs.eg.db,
+                    keys=row.names(countData),
+                    keytype="ENSEMBL",
+                    column="ENTREZID",
+                    multiVals="first")
+```
+
+## Pathway analysis
+
+Here we are going to use the gage package for pathway analysis. Once we have a list of enriched pathways, we're going to use the pathview package to draw pathway diagrams, shading the molecules in the pathway by their degree of up/down-regulation.
+
+```{r}
+library(pathview)
+library(gage)
+library(gageData)
+```
+
+```{r}
+data(kegg.sets.hs)
+data(sigmet.idx.hs)
+
+# Focus on signaling and metabolic pathways only
+kegg.sets.hs = kegg.sets.hs[sigmet.idx.hs]
+
+# Examine the first 3 pathways
+head(kegg.sets.hs, 3)
+```
+
+The main gage() function requires a named vector of fold changes, where the names of the values are the Entrez gene IDs.
+
+```{r}
+foldchanges = res$log2FoldChange
+names(foldchanges) = res$entrez
+head(foldchanges)
+```
+
+
+```{r}
+# Get the results
+keggres = gage(foldchanges, gsets=kegg.sets.hs)
+```
+
+Now lets look at the object returned from gage().
+
+```{r}
+attributes(keggres)
+```
+
+```{r}
+# Look at the first few down (less) pathways
+head(keggres$less)
+```
+
+
+
+```{r}
+pathview(gene.data=foldchanges, pathway.id="hsa04110")
+```
+
+
+![First pathway figure](./hsa04110.pathview.png){width=80%}
+
+
+**ToDo**: Add more pathway figures here...
+
+**ToDo**: Add GO analysis section...
+
+
+
+
+
+
+
